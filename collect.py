@@ -124,16 +124,24 @@ def detail_38(no):
 
 
 def schedule_38(o, date_col, must):
-    sp = soup(f"http://www.38.co.kr/html/fund/index.htm?o={o}", "euc-kr")
-    t = biggest_table(sp, must)
-    rows = []
-    if not t: return rows
-    for tr in t.find_all("tr"):
-        c = [txt(x) for x in tr.find_all("td")]
-        if len(c) < 5: continue
-        a, b = parse_range(c[date_col])
-        if not a: continue
-        rows.append(dict(name=clean_name(c[0]), no=no_of(tr), start=a, end=b, cells=c))
+    """일정 표는 먼 미래 → 과거 순. 공모가 몰리는 시기엔 가까운 일정이 2페이지 이후로 밀릴 수 있어 오늘 전까지 넘겨 봄"""
+    rows, seen = [], set()
+    for p in range(1, 6):
+        sp = soup(f"http://www.38.co.kr/html/fund/index.htm?o={o}&page={p}", "euc-kr")
+        t = biggest_table(sp, must)
+        if not t: break
+        oldest = None
+        for tr in t.find_all("tr"):
+            c = [txt(x) for x in tr.find_all("td")]
+            if len(c) < 5: continue
+            a, b = parse_range(c[date_col])
+            if not a: continue
+            k = (c[0], c[date_col])
+            if k in seen: continue
+            seen.add(k)
+            rows.append(dict(name=clean_name(c[0]), no=no_of(tr), start=a, end=b, cells=c))
+            oldest = b if oldest is None or b < oldest else oldest
+        if oldest is None or oldest < TODAY - dt.timedelta(days=7): break
     return rows
 
 
