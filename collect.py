@@ -40,6 +40,7 @@ def fetch(url, enc=None, method="GET", data=None, headers=None, tries=4, pause=0
         except Exception as e:
             if k == tries - 1: raise
             time.sleep(2 * (k + 1))
+    raise RuntimeError(f"요청 한도 초과(429) 반복: {url}")
 
 
 def soup(url, enc, **kw):
@@ -172,6 +173,18 @@ def ipostock_find(name, codes):
     return None
 
 
+def horizon(ld, mth):
+    """상장일 + 15일(mth=0.5) 또는 n개월 (월말 보정)"""
+    if mth == 0.5: return ld + dt.timedelta(days=15)
+    y, mo = ld.year + (ld.month - 1 + int(mth)) // 12, (ld.month - 1 + int(mth)) % 12 + 1
+    return dt.date(y, mo, min(ld.day, calendar.monthrange(y, mo)[1]))
+
+
+def ix_at(ix, d):
+    ks = [k for k in ix if k <= d]
+    return ix[max(ks)] if ks else None
+
+
 def lock_months(p):
     p = p.replace("상장후 ", "").strip()
     if p == "15일": return 0.5
@@ -206,9 +219,9 @@ def daum(path, ref):
     return fetch("https://finance.daum.net" + path, headers={"Referer": ref}, pause=0.5).json()
 
 
-def daum_series(code):
+def daum_series(code, adjusted=False):
     try:
-        j = daum(f"/api/charts/A{code}/days?limit=400&adjusted=false", f"https://finance.daum.net/quotes/A{code}")
+        j = daum(f"/api/charts/A{code}/days?limit=400&adjusted={'true' if adjusted else 'false'}", f"https://finance.daum.net/quotes/A{code}")
     except Exception:
         return []          # 잘못된 코드(예: 38 표기 코드와 실제 코드가 다른 외국기업) → 이름 검색으로 재시도
     return [(d["date"][:10], d["tradePrice"], d["openingPrice"]) for d in j.get("data", []) if d.get("candleAccTradeVolume")]
@@ -236,12 +249,6 @@ def main():
     cache_path = os.path.join(DATA, "cache.json")
     cache = json.load(open(cache_path, encoding="utf-8")) if os.path.exists(cache_path) else {}
     cache.setdefault("detail", {}); cache.setdefault("holders", {})
-    overrides = {}
-    op = os.path.join(ROOT, "overrides.csv")
-    if os.path.exists(op):
-        for r in csv.DictReader(open(op, encoding="utf-8-sig")):
-            overrides[r["종목명"].strip()] = r
-
     allrows = list_38()
     LOG.append(f"38 신규상장 목록 {YEAR}년: {len(allrows)}건")
     stocks = [r for r in allrows if not EXCLUDE.search(r["raw"]) and r["date"] <= TODAY]
@@ -286,15 +293,20 @@ def main():
                 c2 = daum_search(n)
                 if c2 and c2 != code: code = c2; ser = daum_series(code)
             ser = [x for x in ser if x[0] >= s["date"].isoformat()]
+            # 무상증자·액면분할 대비: 수정주가 시계열을 쓰고 공모가도 같은 비율로 보정
+            fac = 1.0
+            if ser:
+                adj = dict((x[0], x[1]) for x in daum_series(code, adjusted=True))
+                if adj.get(ser[0][0]):
+                    fac = adj[ser[0][0]] / ser[0][1]
+                    ser = [(dd_, adj.get(dd_, v * fac), o_) for dd_, v, o_ in ser]
             px = [x[1] for x in ser]
             market = "코스피" if (s["kospi"] or d.get("시장구분") == "거래소") else "코스닥"
             ix = kpd if market == "코스피" else kqd
             k = kind.get(norm(n), {})
-            ov = overrides.get(n, {})
             lk = d.get("의무보유확약", "")
             listed = h.get("listed") or 0
-            r = dict(name=n, code=code, market=market, type=(ov.get("상장유형") or "미분류").strip(),
-                     type_conf=(ov.get("확신도") or "낮음").strip(), industry=k.get("industry") or d.get("업종", ""),
+            r = dict(name=n, code=code, market=market, industry=k.get("industry") or d.get("업종", ""),
                      product=k.get("product", ""), lead=(d.get("주간사", "").split(",")[0]).strip(), underwriters=d.get("주간사", ""),
                      listdate=s["date"].isoformat(), fcst=(parse_range(d.get("수요예측일", ""))[0] or "") and parse_range(d.get("수요예측일", ""))[0].isoformat(),
                      band_lo=lo, band_hi=hi, offer=offer, inst=num(d.get("기관경쟁률", "").split(":")[0]),
@@ -307,15 +319,23 @@ def main():
             r["mcap_ipo"] = offer * listed / 1e8 if listed else None
             r["pricing"] = ("상단초과" if offer > hi else "상단" if offer == hi else "밴드내" if offer > lo else "하단" if offer == lo else "하단미만") if lo and hi else "-"
             r["bandpos"] = offer / hi - 1 if hi else None
-            opn = ser[0][2] if ser else s.get("open")
+            opn = ser[0][2] if ser else s.get("open")          # 시초가(원래 가격)
             r["open"] = opn; r["r_open"] = opn / offer - 1 if opn else None
-            for key_, nn in (("r0", 0), ("r1", 1), ("r5", 5), ("r20", 20), ("r60", 60)):
-                r[key_] = px[nn] / offer - 1 if len(px) > nn else None
+            offer_adj = offer * fac                            # 수정주가 기준 공모가
+            r["offer_adj"] = offer_adj
+            r["r0"] = px[0] / offer_adj - 1 if px else None
+            # 확약 해제 시점과 같은 달력 기준: 15일·1개월·3개월·6개월 (그날이 휴일이면 직전 거래일 종가)
+            for key_, mth in (("r15", 0.5), ("r1m", 1), ("r3m", 3), ("r6m", 6)):
+                hd = horizon(s["date"], mth).isoformat()
+                if not px or hd > max(cal[-1], ser[-1][0]): r[key_] = None; continue
+                upto = [x[1] for x in ser if x[0] <= hd]
+                r[key_] = upto[-1] / offer_adj - 1 if upto else None
             if px:
                 mx = max(px); last_d = ser[-1][0]
-                r.update(cur=px[-1], r_cur=px[-1] / offer - 1, maxc=mx, dd=px[-1] / mx - 1, days=len(px),
+                r.update(cur=px[-1], r_cur=px[-1] / offer_adj - 1, maxc=mx, dd=px[-1] / mx - 1, days=len(px),
                          s_ret=px[-1] / px[0] - 1, mcap_cur=px[-1] * listed / 1e8 if listed else None)
-                i0, i1 = ix.get(ser[0][0]), ix.get(last_d)
+                # 지수가 그날 아직 안 올라왔으면 직전 값 사용
+                i0, i1 = ix_at(ix, ser[0][0]), ix_at(ix, last_d)
                 r["i_ret"] = i1 / i0 - 1 if i0 and i1 else None
                 r["excess"] = r["s_ret"] - r["i_ret"] if r["i_ret"] is not None else None
             else:
@@ -324,15 +344,10 @@ def main():
             for mth, sh in (h.get("locks") or {}).items():
                 mth = float(mth)
                 if mth > 12: continue
-                ld = s["date"]
-                if mth == 0.5: ud = ld + dt.timedelta(days=15)
-                else:
-                    y, mo = ld.year + (ld.month - 1 + int(mth)) // 12, (ld.month - 1 + int(mth)) % 12 + 1
-                    ud = dt.date(y, mo, min(ld.day, calendar.monthrange(y, mo)[1]))
+                ud = horizon(s["date"], mth)
                 unlocks.append(dict(name=n, period="15일" if mth == 0.5 else f"{int(mth)}개월", date=ud.isoformat(), shares=sh,
                                     pct=sh / listed if listed else None, amt=(r["cur"] * sh / 1e8) if r["cur"] else None,
-                                    ratio=(r["cur"] / offer) if r["cur"] else None))
-            if n not in overrides: WARN.append(f"{n}: 상장유형 미분류 (overrides.csv에 추가하면 반영)")
+                                    ratio=(r["cur"] / offer_adj) if r["cur"] else None))
             rows.append(r)
         except Exception as e:
             WARN.append(f"{n}: 처리 실패 — {type(e).__name__}: {e}")
@@ -362,8 +377,8 @@ def main():
                kp=[kpd.get(d) for d in cal], updated=NOW.strftime("%Y-%m-%d %H:%M"))
     json.dump(out, open(os.path.join(DATA, "ipo.json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     json.dump(cache, open(cache_path, "w", encoding="utf-8"), ensure_ascii=False, indent=0)
-    cols = ["name", "code", "market", "type", "industry", "lead", "fcst", "listdate", "band_lo", "band_hi", "offer", "pricing", "inst",
-            "lockup", "retail", "amount", "listed", "float_pct", "open", "r_open", "r0", "r1", "r5", "r20", "r60", "cur", "r_cur", "maxc", "dd", "excess"]
+    cols = ["name", "code", "market", "industry", "lead", "fcst", "listdate", "band_lo", "band_hi", "offer", "pricing", "inst",
+            "lockup", "retail", "amount", "listed", "float_pct", "open", "r_open", "r0", "r15", "r1m", "r3m", "r6m", "cur", "r_cur", "maxc", "dd", "excess"]
     with open(os.path.join(DATA, "ipo.csv"), "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f); w.writerow(cols)
         for r in rows: w.writerow([r.get(c) for c in cols])
