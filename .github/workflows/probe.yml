@@ -1,20 +1,87 @@
 name: 1-데이터소스-접속테스트
- 
+
 on:
   workflow_dispatch:
- 
+
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: 접속 테스트 실행
-        run: python probe.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: probe-result
-          path: probe_result.json
-          run: python probe.py
+        run: |
+          cat > /tmp/probe.py <<'PYEOF'
+          """데이터 소스 접속 테스트 (GitHub Actions 서버에서 실행).
+          각 소스에 한 번씩 접속해 보고, 응답 코드·크기·기대한 내용이 들어있는지 표로 남깁니다."""
+          import json, os, time, urllib.request, urllib.parse, urllib.error, ssl
+
+          UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+          TESTS = [
+              # (이름, 용도, URL, 인코딩, 기대 문자열, 추가헤더, POST데이터)
+              ("38커뮤니케이션 신규상장 목록", "상장 목록·시초가", "http://www.38.co.kr/html/fund/index.htm?o=nw",
+               "euc-kr", "신규상장일", {}, None),
+              ("38커뮤니케이션 공모 상세", "밴드·경쟁률·확약", "http://www.38.co.kr/html/fund/?o=v&no=2307",
+               "euc-kr", "기관경쟁률", {}, None),
+              ("KIND 신규상장기업", "상장 목록·업종", "https://kind.krx.co.kr/listinvstg/listingcompany.do",
+               "utf-8", "덕산넵코어스", {"Content-Type": "application/x-www-form-urlencoded"},
+               urllib.parse.urlencode({"method": "searchListingTypeSub", "currentPageSize": "100", "pageIndex": "1",
+                                       "orderMode": "1", "orderStat": "D", "forward": "listingtype_sub",
+                                       "listTypeArrStr": "01|", "choicTypeArrStr": "04|", "secuGrpArrStr": "0|ST|FS|DR|",
+                                       "fromDate": "2026-01-01", "toDate": "2026-12-31"}).encode()),
+              ("아이피오스탁 주주구성", "보호예수·유통물량", "http://www.ipostock.co.kr/view_pg/view_02.asp?code=B202602023",
+               "utf-8", "보호예수", {}, None),
+              ("Daum 금융 일봉", "종가", "https://finance.daum.net/api/charts/A386380/days?limit=5",
+               "utf-8", "tradePrice", {"Referer": "https://finance.daum.net/quotes/A386380"}, None),
+              ("Daum 금융 지수", "코스닥·코스피 지수", "https://finance.daum.net/api/market_index/days?market=KOSDAQ&perPage=5&page=1",
+               "utf-8", "tradePrice", {"Referer": "https://finance.daum.net/domestic/kosdaq"}, None),
+              ("네이버 차트", "종가(대안)", "https://fchart.stock.naver.com/sise.nhn?symbol=386380&timeframe=day&count=5&requestType=0",
+               "euc-kr", "<item", {}, None),
+              ("Yahoo Finance", "종가(대안)", "https://query1.finance.yahoo.com/v8/finance/chart/386380.KQ?range=1mo&interval=1d",
+               "utf-8", "timestamp", {}, None),
+              ("DART OpenAPI", "증권신고서(대안, 키 필요)", "https://opendart.fss.or.kr/api/list.json?crtfc_key=TEST",
+               "utf-8", "status", {}, None),
+              ("공공데이터포털", "시세(대안, 키 필요)", "https://apis.data.go.kr/1160100/service/GetStockSecuritiesInfoService/getStockPriceInfo",
+               "utf-8", "", {}, None),
+          ]
+
+          ctx = ssl.create_default_context()
+          rows = []
+          for name, use, url, enc, expect, headers, data in TESTS:
+              h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "ko-KR,ko;q=0.9"}
+              h.update(headers)
+              t0 = time.time()
+              status, size, found, note = None, 0, False, ""
+              try:
+                  req = urllib.request.Request(url, data=data, headers=h, method="POST" if data else "GET")
+                  with urllib.request.urlopen(req, timeout=25, context=ctx) as r:
+                      body = r.read(); status = r.status
+              except urllib.error.HTTPError as e:
+                  status = e.code; body = e.read() or b""
+              except Exception as e:
+                  body = b""; note = type(e).__name__ + ": " + str(e)[:120]
+              size = len(body)
+              text = body.decode(enc, errors="replace")
+              found = (expect in text) if expect else (status is not None and status < 500)
+              ok = bool(status) and status < 400 and found
+              if status and not found and not note:
+                  note = "응답은 왔지만 기대한 내용 없음 (차단 페이지일 수 있음): " + " ".join(text[:150].split())
+              rows.append(dict(name=name, use=use, status=status, bytes=size, ok=ok, sec=round(time.time() - t0, 1), note=note))
+              print(f"{'OK ' if ok else 'NG '} {name:<24} status={status} bytes={size} {note}")
+
+          lines = ["## 데이터 소스 접속 테스트 결과", "", "| 결과 | 소스 | 용도 | HTTP | 크기 | 초 | 메모 |", "|---|---|---|---|---|---|---|"]
+          for r in rows:
+              lines.append(f"| {'✅' if r['ok'] else '❌'} | {r['name']} | {r['use']} | {r['status']} | {r['bytes']:,} | {r['sec']} | {r['note'].replace('|', '/')} |")
+          md = "\n".join(lines)
+          if os.environ.get("GITHUB_STEP_SUMMARY"):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+                  f.write(md + "\n")
+          with open("probe_result.json", "w", encoding="utf-8") as f:
+              json.dump(rows, f, ensure_ascii=False, indent=1)
+          print(md)
+
+          PYEOF
+          python /tmp/probe.py
