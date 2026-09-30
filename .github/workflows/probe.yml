@@ -17,4 +17,4 @@ jobs:
         with:
           name: probe-result
           path: probe_result.json
- 
+          run: python probe.py
