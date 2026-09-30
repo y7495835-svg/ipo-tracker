@@ -186,11 +186,13 @@ def ipostock_holders(code):
     sp = soup(f"http://www.ipostock.co.kr/view_pg/view_02.asp?code={code}", "utf-8")
     listed = flt = 0; locks = {}; in_lock = False
     for c, _ in leaf_rows(sp):
+        c = [x for x in c if x]          # 빈 칸 제거
         if not c: continue
-        if c[0] == "공모후 상장주식수": listed = int(num(c[1]) or 0)
-        elif c[0] == "유통가능 주식합계": flt = int(num(c[1]) or 0)
-        elif c[0] == "보호예수 물량합계": in_lock = False
-        elif c[0] == "보호예수매도금지":
+        k0 = c[0].replace(" ", "")       # '보호예수<br>매도금지'처럼 줄바꿈이 공백으로 읽히는 경우 대비
+        if k0 == "공모후상장주식수": listed = int(num(c[1]) or 0)
+        elif k0 == "유통가능주식합계": flt = int(num(c[1]) or 0)
+        elif k0 == "보호예수물량합계": in_lock = False
+        elif k0 == "보호예수매도금지":
             in_lock = True; m = lock_months(c[-1])
             if m is not None: locks[m] = locks.get(m, 0) + int(num(c[2]) or 0)
         elif in_lock and len(c) >= 5:
@@ -205,7 +207,10 @@ def daum(path, ref):
 
 
 def daum_series(code):
-    j = daum(f"/api/charts/A{code}/days?limit=400&adjusted=false", f"https://finance.daum.net/quotes/A{code}")
+    try:
+        j = daum(f"/api/charts/A{code}/days?limit=400&adjusted=false", f"https://finance.daum.net/quotes/A{code}")
+    except Exception:
+        return []          # 잘못된 코드(예: 38 표기 코드와 실제 코드가 다른 외국기업) → 이름 검색으로 재시도
     return [(d["date"][:10], d["tradePrice"], d["openingPrice"]) for d in j.get("data", []) if d.get("candleAccTradeVolume")]
 
 
@@ -270,10 +275,10 @@ def main():
             m = re.search(r"구주매출\s*:\s*([\d,]+)", d.get("상장공모", "")); old = num(m.group(1)) if m else 0
             # holders
             h = cache["holders"].get(n)
-            if not h or not h.get("listed"):
+            if not h or not h.get("listed") or not h.get("locks"):
                 ic = ipostock_find(n, ipc)
                 h = ipostock_holders(ic) if ic else {}
-                if h.get("listed"): cache["holders"][n] = h
+                if h.get("listed") and h.get("locks"): cache["holders"][n] = h
                 else: WARN.append(f"{n}: 아이피오스탁 주주구성 못 찾음")
             # prices
             ser = daum_series(code) if code else []
