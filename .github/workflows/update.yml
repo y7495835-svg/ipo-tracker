@@ -2,7 +2,9 @@ name: 2-사이트-자동갱신
 
 on:
   schedule:
-    - cron: "30 9 * * 1-5"     # 평일 18:30 KST (= 09:30 UTC). GitHub 사정으로 수십 분 늦을 수 있음
+    - cron: "40 20 * * 0-4"    # 평일 아침 05:40 KST (= 전날 20:40 UTC, 일~목) → 06:00 전후 반영
+    - cron: "40 10 * * 1-5"    # 평일 저녁 19:40 KST (= 10:40 UTC) → 20:00 전후 반영
+    # GitHub 예약 실행은 10~30분 늦게 돌 수 있어 목표 시각보다 20분 일찍 잡음
   workflow_dispatch:
 
 permissions:
