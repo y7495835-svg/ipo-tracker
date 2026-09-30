@@ -65,6 +65,13 @@ table.led{border-collapse:collapse;width:100%;min-width:1180px;font-size:12.5px}
 .led td{padding:6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;font-family:var(--f-mono);font-variant-numeric:tabular-nums}
 .led td.nm{font-family:var(--f-sans);font-weight:600}
 .led td.nm small{display:block;font-weight:400;color:var(--muted);font-size:11px}
+.led th{white-space:nowrap}
+.led th:first-child,.led td:first-child{position:sticky;left:0;z-index:2;background:var(--panel);box-shadow:1px 0 0 var(--line)}
+.led th:first-child{z-index:3;background:var(--soft)}
+.led tbody tr:hover td:first-child{background:var(--soft)}
+.led tbody tr.open td:first-child{background:var(--accent-bg)}
+.led tr.detail td:first-child{position:static;box-shadow:none}
+@media (max-width:600px){.led td.nm{max-width:6.5em;white-space:normal;word-break:keep-all;font-size:12px;padding-right:10px}.led td.nm small{display:none}}
 .led tbody tr{cursor:pointer}
 .led tbody tr:hover{background:var(--soft)}
 .led tbody tr.open{background:var(--accent-bg)}
@@ -246,7 +253,7 @@ function drawBench(){
       s+=`<rect class="bar" x="${cx-w/2}" y="${Math.min(y0,y1)}" width="${w}" height="${Math.max(1,Math.abs(y1-y0))}" fill="${col}" rx="2"><title>${esc(g.l)}: ${fmtP(g.v)} (n=${g.n})</title></rect>`;
       s+=`<text x="${cx}" y="${g.v>=0?y1-4:y1+12}" text-anchor="middle" style="fill:var(--ink);font-weight:600">${fmtP(g.v,0)}</text>`; }
     else s+=`<text x="${cx}" y="${y(0)-4}" text-anchor="middle">표본 없음</text>`;
-    s+=`<text x="${cx}" y="${H-pb+16}" text-anchor="middle" style="fill:var(--ink);font-family:var(--f-sans);font-size:11px">${esc(g.l.length>8?g.l.slice(0,7)+'…':g.l)}</text><text x="${cx}" y="${H-pb+30}" text-anchor="middle">n=${g.n}</text>`;
+    s+=`<text x="${cx}" y="${H-pb+16}" text-anchor="middle" style="fill:var(--ink);font-family:var(--f-sans);font-size:11px">${esc(g.l.length>(bw>100?12:8)?g.l.slice(0,(bw>100?11:7))+'…':g.l)}</text><text x="${cx}" y="${H-pb+30}" text-anchor="middle">n=${g.n}</text>`;
   });
   $('#bar').innerHTML=s;
   $('#btab').innerHTML = `<thead><tr><th>${D.label}</th><th>종목</th>${METS.slice(0,7).map(m=>`<th>${m[1]}</th>`).join('')}<th>승률</th></tr></thead><tbody>`+
@@ -273,7 +280,13 @@ function drawScatter(){
   s+=`<text x="${(pl+W-pr)/2}" y="${H-4}" text-anchor="middle" style="font-family:var(--f-sans)">${esc(xl)}${logx?' (로그)':''}</text>`;
   P.forEach(r=>{ const v=r[met]; s+=`<circle cx="${X(xv(r))}" cy="${Y(v)}" r="4.2" fill="${v>=0?'var(--up)':'var(--down)'}" fill-opacity=".72" stroke="var(--panel)" stroke-width="1"><title>${esc(r.name)} · ${xl} ${D.fmtx(D.x(r))} · ${ml} ${fmtP(v)}</title></circle>`;});
   // label extremes
-  const ext=[...P].sort((a,b)=>b[met]-a[met]); [ext[0],ext[1],ext[ext.length-1]].filter(Boolean).forEach(r=>{ const px=X(xv(r)), right=px>W-110; s+=`<text x="${right?px-7:px+7}" y="${Y(r[met])+3}" text-anchor="${right?'end':'start'}" style="fill:var(--ink);font-family:var(--f-sans)">${esc(r.name)}</text>`;});
+  // 최고·최저 종목 이름 표시 (같은 값에 여러 종목이 겹치면 '외 n' 으로 묶음)
+  const ext=[...P].sort((a,b)=>b[met]-a[met]);
+  const lab=(grp,dy)=>{ if(!grp.length) return; const r=grp[0], px=X(xv(r)), right=px>W-150;
+    const name=grp.length>1?`${r.name} 외 ${grp.length-1}`:r.name;
+    s+=`<text x="${right?px-7:px+7}" y="${Y(r[met])+dy}" text-anchor="${right?'end':'start'}" style="fill:var(--ink);font-family:var(--f-sans)">${esc(name)}</text>`; };
+  if(ext.length){ const top=ext[0][met], bot=ext[ext.length-1][met];
+    lab(ext.filter(r=>Math.abs(r[met]-top)<1e-9), -6); if(bot!==top) lab(ext.filter(r=>Math.abs(r[met]-bot)<1e-9).reverse(), 13); }
   $('#sc').innerHTML=s;
   const rs=spearman(P.map(xv),P.map(r=>r[met])), rp=pearson(P.map(xv),P.map(r=>r[met]));
   const word = v => v==null?'판단 불가':Math.abs(v)<.2?'관계가 거의 없음':Math.abs(v)<.4?(v>0?'약한 양(+)의 관계':'약한 음(−)의 관계'):Math.abs(v)<.6?(v>0?'뚜렷한 양(+)의 관계':'뚜렷한 음(−)의 관계'):(v>0?'강한 양(+)의 관계':'강한 음(−)의 관계');
@@ -294,7 +307,7 @@ const COLS = [
   {k:'float_pct',l:'유통',f:r=>fmtP(r.float_pct,0).replace('+','')},
   {k:'r_open',l:'시초',ret:1},{k:'r0',l:'상장일',ret:1},{k:'r15',l:'15일',ret:1},{k:'r1m',l:'1개월',ret:1},{k:'r3m',l:'3개월',ret:1},{k:'r6m',l:'6개월',ret:1},
   {k:'cur',l:'현재가',f:r=>fmtN(r.cur)},
-  {k:'r_cur',l:'현재',ret:1},{k:'dd',l:'고점比',ret:1},{k:'excess',l:'지수초과',ret:1},
+  {k:'r_cur',l:'현재',ret:1},{k:'dd',l:'고점대비',ret:1},{k:'excess',l:'지수초과',ret:1},
   {k:'px',l:'흐름',f:r=>spark(r),nosort:1},
 ];
 let sortK='listdate', sortDir=-1, openName=null;
