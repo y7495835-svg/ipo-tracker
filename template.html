@@ -88,7 +88,7 @@ table.led{border-collapse:collapse;width:100%;min-width:1180px;font-size:12.5px}
 .ul .p{font-family:var(--f-mono);text-align:right}
 .ul.hot .d{color:var(--accent);font-weight:600}
 .ul .meta{grid-column:2 / 4;color:var(--muted);font-size:11px}
-.ev{display:grid;grid-template-columns:62px auto minmax(0,1fr);gap:2px 8px;font-size:12.5px;padding:4px 0;border-top:1px dashed var(--line);align-items:baseline}
+.ev{display:grid;grid-template-columns:78px auto minmax(0,1fr);gap:2px 8px;font-size:12.5px;padding:4px 0;border-top:1px dashed var(--line);align-items:baseline}
 .ev:first-of-type{border-top:0}
 .ev .d{font-family:var(--f-mono);color:var(--muted)}
 .ev .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
@@ -370,7 +370,7 @@ renderLed();
   const keys=Object.keys(wk).sort();
   $('#sch').innerHTML = keys.length ? keys.map(k=>{const m=pd(k), e=new Date(m); e.setDate(m.getDate()+6); const f=d=>`${d.getMonth()+1}/${d.getDate()}`;
     return `<div class="wk"><h4>${f(m)} – ${f(e)} 주</h4>${wk[k].map(x=>{
-      const rng = x.start===x.end ? md(x.start) : md(x.start)+'–'+md(x.end).slice(-2);
+      const rng = x.start===x.end ? md(x.start) : md(x.start)+'–'+(x.start.slice(5,7)===x.end.slice(5,7)?x.end.slice(8):md(x.end));
       const meta = x.kind==='상장' ? '신규상장' : [x.band&&x.band!=='-'?'밴드 '+x.band:'', x.offer&&x.offer!=='-'?'확정 '+x.offer:'', x.comp?'경쟁률 '+x.comp:'', x.underwriter||''].filter(Boolean).join(' · ');
       return `<div class="ev"><span class="d">${rng}</span><span class="chip k-${x.kind}">${x.kind}</span><span class="n">${esc(x.name)}</span><span class="meta">${esc(meta)}</span></div>`;}).join('')}</div>`;}).join('')
   : '<p class="sub">앞으로 4주 안에 잡힌 일정이 없습니다.</p>';
